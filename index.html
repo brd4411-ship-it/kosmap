@@ -246,7 +246,7 @@ function boot(){
   renderLegend();
   setStatus();
   autoLoop();
-  refresh(true); // 첫 실시간 시도
+  if(marketPhase().open) refresh(true); // 장중에만 실시간 시도 — 장 마감 후엔 실패 배너 없이 스냅샷(오늘 종가) 유지
 }
 function rows(){ return S.stocks[S.market]; }
 
@@ -495,9 +495,9 @@ async function refresh(manual){
       S.live=true; S.snapTs=SNAPSHOT.ts;
       S.liveTs=new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hour12:false})+' 기준';
       update();
-    } else if(manual){ setBanner('갱신 실패 — 스냅샷 유지 중'); }
+    } else if(manual && marketPhase().open){ setBanner('갱신 실패 — 스냅샷 유지 중'); }
   }catch(e){
-    if(manual) setBanner('실시간 연결 실패 — 스냅샷 유지 중');
+    if(manual && marketPhase().open) setBanner('실시간 연결 실패 — 스냅샷 유지 중');
   }
   btn.classList.remove('spin');
   setStatus();
@@ -513,7 +513,7 @@ function marketPhase(){
 function setBanner(msg){
   const b=$('#banner');
   if(msg){ $('#bannerTx').textContent=msg; b.classList.add('show'); return; }
-  if(!S.live){ $('#bannerTx').textContent=`오프라인 스냅샷 표시 중 — ${S.snapTs} 장 마감 기준 데이터입니다. 실시간 갱신은 브라우저에서 자동 시도됩니다.`; b.classList.add('show'); }
+  if(!S.live && marketPhase().open){ $('#bannerTx').textContent=`오프라인 스냅샷 표시 중 — ${S.snapTs} 장 마감 기준 데이터입니다. 실시간 갱신은 브라우저에서 자동 시도됩니다.`; b.classList.add('show'); }
   else b.classList.remove('show');
 }
 function setStatus(){
