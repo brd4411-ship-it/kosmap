@@ -1066,6 +1066,21 @@ function autoLoop(){
   setInterval(()=>{ const p=marketPhase(); if(p.open){ refresh(false); } else { setStatus(); } },60000);
   setInterval(setStatus,30000);
 }
+/* ── 일일 스냅샷(data/snapshot.json) 적용 훅: 더 최신일 때만 메모리 데이터 교체 ── */
+window.__KOSMAP_APPLY_KR__=function(d){
+  try{
+    if(!d||!d.ts||!Array.isArray(d.kospi)||!Array.isArray(d.kosdaq)) return false;
+    if(!SNAPSHOT||String(d.ts)<=String(SNAPSHOT.ts)) return false;
+    const conv=r=>r.map(x=>({c:x[0],n:x[1],s:x[2],p:x[3],d:x[4],m:x[5],lp:x[3],ld:x[4]}));
+    SNAPSHOT.ts=d.ts; if(d.indexes) SNAPSHOT.indexes=d.indexes;
+    SNAPSHOT.kospi=d.kospi; SNAPSHOT.kosdaq=d.kosdaq;
+    S.snapTs=d.ts; S.indexes=SNAPSHOT.indexes;
+    S.stocks.KOSPI=conv(d.kospi); S.stocks.KOSDAQ=conv(d.kosdaq);
+    S.live=false; S.liveTs=null;
+    update(); setStatus();
+    return true;
+  }catch(e){ return false; }
+};
 boot();
 
 })();
@@ -1258,6 +1273,19 @@ renderLegend(); bind(); update(); setStatus();
 setInterval(()=>{ if(marketPhaseUS().open) refresh(false); else setStatus(); },60000);
 setInterval(setStatus,30000);
 if(marketPhaseUS().open) refresh(false);
+/* ── 일일 스냅샷(data/snapshot_us.json) 적용 훅: 더 최신일 때만 교체 ── */
+window.__KOSMAP_APPLY_US__=function(d){
+  try{
+    if(!d||!d.ts||!Array.isArray(d.rows)||!d.rows.length) return false;
+    if(String(d.ts)<=String(US.ts)) return false;
+    US.ts=d.ts; if(d.indexes) US.indexes=d.indexes; US.rows=d.rows;
+    STOCKS.length=0;
+    for(const r of US.rows) STOCKS.push({c:r[0],n:r[1],s:r[2],p:r[3],d:(r[4]==null?0:r[4]),m:r[5]});
+    M.live=false; M.liveTs=null;
+    update(); renderLegend(); setStatus();
+    return true;
+  }catch(e){ return false; }
+};
 window.__usHeatOnResize=function(){ if(M.view==='treemap') try{renderTreemap();}catch(e){} };
 })();
 
@@ -2503,6 +2531,52 @@ window[SHOWHOOK]=function(){ try{ if(prevShow) prevShow(); }catch(e){} if(!done)
     if(t==='heatus'&&window.__usHeatOnResize) window.__usHeatOnResize();
     if(t==='labus'&&window.__usLabOnShow) window.__usLabOnShow();
   }));
+})();
+</script>
+<script>
+/* ═══════════════ 일일 데이터 자동 갱신 로더 ═══════════════
+   data/snapshot.json(국장)·data/snapshot_us.json(미장)을 페이지 로드 뒤에 비동기로 읽어
+   임베디드보다 ts 가 새로울 때만 메모리 데이터를 교체하고 기존 렌더 함수로 다시 그린다.
+   · 실패/404/구버전/장애 → 아무 것도 하지 않음(임베디드 스냅샷 그대로 = 무회귀)
+   · 페이지 첫 렌더를 막지 않는다(load + idle 이후 실행, 8초 타임아웃)
+   · GitHub Pages CDN 캐시(약 10분)를 피하려고 ?v=타임스탬프 를 붙인다 */
+(function(){
+  'use strict';
+  var krApp=!!window.__KOSMAP_APPLY_KR__, usApp=!!window.__KOSMAP_APPLY_US__;
+  if(!krApp && !usApp) return;
+  function bust(u){ return u + (u.indexOf('?')<0?'?':'&') + 'v=' + Date.now(); }
+  function getJSON(u){
+    try{
+      if(!window.fetch) return Promise.resolve(null);
+      var ctl=new AbortController(), t=setTimeout(function(){ctl.abort();},8000);
+      return fetch(bust(u),{cache:'no-store',signal:ctl.signal})
+        .then(function(r){ clearTimeout(t); return r.ok?r.json():null; })
+        .catch(function(){ clearTimeout(t); return null; });
+    }catch(e){ return Promise.resolve(null); }
+  }
+  function tag(ts){
+    var f=document.getElementById('footTs'), s=document.getElementById('status'),
+        u=document.getElementById('usStatus');
+    if(f) f.title='자동 갱신 스냅샷 '+ts;
+    if(s) s.title='데이터 기준 '+ts;
+    if(u) u.title='데이터 기준 '+ts;
+  }
+  function run(){
+    var jobs=[];
+    if(krApp) jobs.push(getJSON('data/snapshot.json').then(function(d){
+      if(d && window.__KOSMAP_APPLY_KR__(d)){ tag(d.ts); console.info('[KOSMAP] 국장 스냅샷 자동 갱신', d.ts); }
+    }));
+    if(usApp) jobs.push(getJSON('data/snapshot_us.json').then(function(d){
+      if(d && window.__KOSMAP_APPLY_US__(d)){ tag(d.ts); console.info('[KOSMAP] 미장 스냅샷 자동 갱신', d.ts); }
+    }));
+    Promise.all(jobs).catch(function(){});
+  }
+  function schedule(){
+    if(window.requestIdleCallback) requestIdleCallback(run,{timeout:2000});
+    else setTimeout(run,600);
+  }
+  if(document.readyState==='complete') schedule();
+  else window.addEventListener('load',schedule);
 })();
 </script>
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","spa":2}' crossorigin="anonymous"></script>

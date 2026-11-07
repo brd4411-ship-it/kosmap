@@ -1,0 +1,64 @@
+name: Update market snapshot data
+
+# 매일 국장 마감 후 시세 스냅샷(data/snapshot.json, data/snapshot_us.json)을 생성해 자동 커밋한다.
+#  - 07:10 UTC = 16:10 KST : 국장 마감(15:30) 직후 1차 갱신
+#  - 09:00 UTC = 18:00 KST : 늦게 반영되는 종가/수정치 재확인(2차)
+#  - 미장 종가는 다음날 07:10 UTC 실행에서 함께 반영된다.
+on:
+  schedule:
+    - cron: "10 7 * * 1-5"
+    - cron: "0 9 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-market-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch KR snapshot (KOSPI/KOSDAQ)
+        run: python3 scripts/fetch_snapshot.py --verbose
+
+      - name: Fetch US snapshot (Yahoo primary / Nasdaq fallback)
+        run: python3 scripts/fetch_snapshot_us.py --verbose --best-effort
+
+      - name: Show resulting data
+        run: |
+          python3 - <<'PY'
+          import json
+          for f in ("data/snapshot.json", "data/snapshot_us.json"):
+              try:
+                  d = json.load(open(f, encoding="utf-8"))
+              except Exception as e:
+                  print(f, "읽기 실패:", e)
+                  continue
+              n = len(d.get("kospi", [])) + len(d.get("kosdaq", [])) + len(d.get("rows", []))
+              print(f"{f}: ts={d.get('ts')} rows={n} source={d.get('source')} generated_at={d.get('generated_at')}")
+          PY
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name  "kosmap-data-bot"
+          git config user.email "kosmap-data-bot@users.noreply.github.com"
+          git add data/snapshot.json data/snapshot_us.json data/sectors.json
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 커밋 생략"
+            exit 0
+          fi
+          TS=$(python3 -c "import json;print(json.load(open('data/snapshot.json'))['ts'])")
+          git commit -m "data: 시세 스냅샷 자동 갱신 (${TS})"
+          git push
