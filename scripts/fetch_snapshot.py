@@ -380,12 +380,19 @@ def main():
         return 2
     ts = max(set(dates), key=dates.count)
 
+    # 장 마감 판정.
+    #  종목별 marketStatus 는 장 종료 후에도 'OPEN'(시간외)으로 남는 경우가 많아 신뢰할 수 없다.
+    #  지수 상태가 양쪽 모두 CLOSE 이거나, KST 기준 15:35 이후 평일이면 마감으로 본다.
     statuses = [s.get("marketStatus") for s in kospi_raw + kosdaq_raw]
     closed = sum(1 for s in statuses if s == "CLOSE")
-    is_closed = closed >= max(1, int(len(statuses) * 0.9))
+    idx_closed = (kospi_status == "CLOSE" and kosdaq_status == "CLOSE")
+    kst_now = dt.datetime.now(dt.timezone(dt.timedelta(hours=9)))
+    after_close = kst_now.weekday() < 5 and (kst_now.hour * 60 + kst_now.minute) >= (15 * 60 + 35)
+    is_closed = idx_closed or after_close
     if not is_closed and not a.allow_open:
-        print("✗ 실패: 장 마감 상태가 아닙니다(CLOSE %d/%d, 지수 %s/%s). 장 마감 후 실행하거나 --allow-open."
-              % (closed, len(statuses), kospi_status, kosdaq_status), file=sys.stderr)
+        print("✗ 실패: 장 마감 상태가 아닙니다(지수 %s/%s, 종목 CLOSE %d/%d, KST %s). 장 마감 후 실행하거나 --allow-open."
+              % (kospi_status, kosdaq_status, closed, len(statuses), kst_now.strftime("%Y-%m-%d %H:%M")),
+              file=sys.stderr)
         return 1
 
     snapshot = {
@@ -408,6 +415,26 @@ def main():
             print("✗ 실패: 새 데이터(%s)가 기존 스냅샷(%s)보다 오래되었습니다. --allow-older 로 강제 가능."
                   % (ts, old_ts), file=sys.stderr)
             return 1
+
+    # 데이터 파일 기준으로도 역행을 막고, 같은 거래일이면 파일을 건드리지 않는다(불필요한 커밋 방지).
+    prev = None
+    try:
+        if os.path.exists(a.out):
+            with open(a.out, encoding="utf-8") as f:
+                prev = json.load(f)
+    except (OSError, ValueError):
+        prev = None
+    if prev and not a.allow_older:
+        if str(ts) < str(prev.get("ts")):
+            print("✗ 실패: 새 데이터(%s)가 data 스냅샷(%s)보다 오래되었습니다. --allow-older 로 강제 가능."
+                  % (ts, prev.get("ts")), file=sys.stderr)
+            return 1
+        if (str(ts) == str(prev.get("ts"))
+                and prev.get("kospi") == kospi_rows
+                and prev.get("kosdaq") == kosdaq_rows):
+            # 환율(usdkrw)은 실시간으로 계속 움직이므로 비교에서 제외한다.
+            print("= 변경 없음: 이미 %s 종가 데이터입니다. 파일 유지." % ts)
+            return 0
 
     print("[5/5] 저장")
     try:
